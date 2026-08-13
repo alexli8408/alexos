@@ -43,7 +43,9 @@ pub extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
     banner(hart_id, dtb);
 
     info!("kernel image  {} KiB", mm::kernel_image_size() / 1024);
-    info!("kernel ends at {:#x} (phys)", mm::kernel_end_phys());
+
+    // SAFETY: boot hart, once, before anything allocates.
+    unsafe { mm::init() };
 
     info!("boot complete");
     sbi::shutdown(sbi::ResetType::Shutdown)

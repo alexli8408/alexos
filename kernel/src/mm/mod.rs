@@ -5,10 +5,11 @@
 //! bug, so they are four distinct newtypes and every conversion is explicit.
 
 pub mod addr;
+pub mod frame;
 
 pub use addr::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 
-use crate::config::VIRT_OFFSET;
+use crate::config::{DRAM_BASE, DRAM_SIZE, VIRT_OFFSET};
 
 // Symbols emitted by linker.ld. Reading their *addresses* is the point; the
 // types are arbitrary because the objects have no Rust-level meaning.
@@ -50,4 +51,25 @@ pub fn kernel_end_phys() -> usize {
 /// Size of the loaded kernel image in bytes.
 pub fn kernel_image_size() -> usize {
     (&raw const __kernel_end as usize) - (&raw const __kernel_start as usize)
+}
+
+/// Bring up physical memory management.
+///
+/// # Safety
+/// Call exactly once, on the boot hart, before any frame is allocated.
+pub unsafe fn init() {
+    let dram_end = PhysAddr(DRAM_BASE + DRAM_SIZE);
+
+    // SAFETY: everything from the end of the kernel image to the top of DRAM
+    // is unused, and the boot page table direct-maps all of it.
+    unsafe { frame::init(dram_end) };
+
+    let total = frame::FRAME_ALLOCATOR.lock().total_frames();
+    crate::info!(
+        "frames: {} usable ({} MiB) from {:#x} to {:#x}",
+        total,
+        total * crate::config::PAGE_SIZE / 1024 / 1024,
+        kernel_end_phys(),
+        dram_end.0
+    );
 }
