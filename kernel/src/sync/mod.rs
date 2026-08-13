@@ -5,13 +5,15 @@
 //! * [`SpinLock`] masks interrupts and busy-waits. It is the only kind of lock
 //!   an interrupt handler may take, and the only kind usable before the
 //!   scheduler exists.
-//! * `Mutex` / `Semaphore` / `Condvar` (added in the scheduler phase) park the
-//!   calling task on a wait queue. They must never be taken from interrupt
-//!   context, because there is no task there to park.
+//! * [`Mutex`] and [`Semaphore`] park the calling task on a [`WaitQueue`].
+//!   They must never be taken from interrupt context, because there is no task
+//!   there to park.
 
 pub mod spin;
+pub mod wait;
 
 pub use spin::{SpinLock, SpinLockGuard};
+pub use wait::{Mutex, MutexGuard, Semaphore, WaitQueue};
 
 /// A value initialised exactly once at boot and read freely thereafter.
 ///
