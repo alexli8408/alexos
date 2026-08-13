@@ -19,9 +19,11 @@
 //!   managed region at init, so there is no compile-time cap on RAM.
 //!
 //! Buddy arithmetic runs on frame indices *relative* to the start of the
-//! region, so the region itself needs no particular alignment: a block of
-//! order `k` is simply one whose relative index is a multiple of `2^k`, an
-//! invariant `init` establishes and split/merge preserve.
+//! region: a block of order `k` is one whose relative index is a multiple of
+//! `2^k`, an invariant `init` establishes and split/merge preserve. The region
+//! base is additionally aligned to the largest block size, which is not needed
+//! for correctness but makes every block physically aligned to its own size --
+//! the property a DMA engine or a superpage mapping needs.
 
 use core::fmt;
 
@@ -108,8 +110,16 @@ impl BuddyAllocator {
         // for, and the direct map makes them writable.
         unsafe { core::ptr::write_bytes(self.bitmap as *mut u8, 0, bitmap_frames * PAGE_SIZE) };
 
-        self.base = PhysPageNum(first.0 + bitmap_frames);
-        self.frames = total - bitmap_frames;
+        // Align the managed region to the largest block size. Buddy
+        // arithmetic only needs *relative* alignment, so this is not required
+        // for correctness -- but with it, an order-k block is also 2^k-frame
+        // aligned in physical address, which is what a DMA engine or a
+        // superpage mapping actually asks for. The cost is under 4 MiB of DRAM
+        // once, at boot.
+        let unaligned = first.0 + bitmap_frames;
+        let aligned = unaligned.next_multiple_of(1 << MAX_ORDER);
+        self.base = PhysPageNum(aligned);
+        self.frames = total - (aligned - first.0);
         self.free_lists = [NIL; MAX_ORDER + 1];
         self.allocated = 0;
         self.peak = 0;
