@@ -15,6 +15,7 @@ pub mod arch;
 pub mod config;
 pub mod mm;
 pub mod sbi;
+pub mod sync;
 
 /// Rust entry point, called from `entry.S` once Sv39 is live, the kernel is
 /// executing out of the high half, and `.bss` has been cleared.
