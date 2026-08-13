@@ -33,6 +33,8 @@ pub mod mm;
 pub mod sbi;
 pub mod sync;
 pub mod test_device;
+pub mod timer;
+pub mod trap;
 
 /// Rust entry point, called from `entry.S` once paging is live and `.bss` is
 /// clear.
@@ -49,8 +51,40 @@ pub extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
     // SAFETY: boot hart, once, before anything allocates.
     unsafe { mm::init() };
 
-    info!("boot complete");
-    sbi::shutdown(sbi::ResetType::Shutdown)
+    trap::init();
+    drivers::init_interrupts(hart_id);
+    timer::init();
+    trap::enable_interrupts();
+
+    info!("boot complete -- type to echo, interrupts are live");
+    echo_loop()
+}
+
+/// Sit idle until something happens, echoing anything typed at the console.
+///
+/// This is a placeholder for the scheduler: it proves the timer is preempting
+/// and that UART input arrives by interrupt rather than polling.
+fn echo_loop() -> ! {
+    let mut last_report = 0;
+    loop {
+        while let Some(byte) = drivers::uart::read_byte() {
+            match byte {
+                b'\r' | b'\n' => println!(),
+                0x7f | 0x08 => print!("\x08 \x08"),
+                b => print!("{}", b as char),
+            }
+        }
+
+        // Report once a second so a silent console still shows the timer
+        // ticking, which is the whole point of this loop.
+        let seconds = timer::uptime_ms() / 1000;
+        if seconds != last_report {
+            last_report = seconds;
+            debug!("uptime {}s, {} ticks", seconds, timer::ticks());
+        }
+
+        arch::wait_for_interrupt();
+    }
 }
 
 /// Print the banner and the machine description.
