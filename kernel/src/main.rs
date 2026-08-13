@@ -11,8 +11,12 @@ use core::panic::PanicInfo;
 
 core::arch::global_asm!(include_str!("entry.S"));
 
+#[macro_use]
+pub mod console;
+
 pub mod arch;
 pub mod config;
+pub mod drivers;
 pub mod mm;
 pub mod sbi;
 pub mod sync;
@@ -25,7 +29,9 @@ pub mod sync;
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
     let _ = (hart_id, dtb);
-    sbi::console_write(b"AlexOS: reached kmain in the high half\n");
+    drivers::init_early();
+    println!("AlexOS: console is live on the NS16550A");
+    info!("boot hart {hart_id}, dtb {dtb:#x}");
     sbi::shutdown(sbi::ResetType::Shutdown)
 }
 
