@@ -48,6 +48,10 @@ pub const MAX_HARTS: usize = 4;
 /// Scheduling quantum in milliseconds.
 pub const TICK_MS: u64 = 10;
 
+/// Frequency of the `time` counter. The `virt` board's ACLINT runs at 10 MHz;
+/// a real platform would read this from the device tree's `timebase-frequency`.
+pub const TIMER_FREQ: u64 = 10_000_000;
+
 // ---------------------------------------------------------------------------
 // User address space layout (low half, so it never collides with the kernel).
 // ---------------------------------------------------------------------------
