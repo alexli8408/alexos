@@ -12,6 +12,8 @@ use core::panic::PanicInfo;
 core::arch::global_asm!(include_str!("entry.S"));
 
 pub mod config;
+pub mod mm;
+pub mod sbi;
 
 /// Rust entry point, called from `entry.S` once Sv39 is live, the kernel is
 /// executing out of the high half, and `.bss` has been cleared.
@@ -21,7 +23,8 @@ pub mod config;
 #[unsafe(no_mangle)]
 pub extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
     let _ = (hart_id, dtb);
-    halt();
+    sbi::console_write(b"AlexOS: reached kmain in the high half\n");
+    sbi::shutdown(sbi::ResetType::Shutdown)
 }
 
 /// Park the hart forever.
