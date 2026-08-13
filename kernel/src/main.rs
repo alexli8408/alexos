@@ -11,6 +11,7 @@ use core::panic::PanicInfo;
 
 core::arch::global_asm!(include_str!("entry.S"));
 
+pub mod arch;
 pub mod config;
 pub mod mm;
 pub mod sbi;
