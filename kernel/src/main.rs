@@ -28,12 +28,12 @@ pub mod arch;
 pub mod backtrace;
 pub mod config;
 pub mod drivers;
+pub mod ktest;
 pub mod lang_items;
 pub mod loader;
 pub mod mm;
 pub mod programs;
 pub mod sbi;
-pub mod ktest;
 pub mod sync;
 pub mod syscall;
 pub mod task;
@@ -63,8 +63,11 @@ pub extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
     timer::init();
     trap::enable_interrupts();
 
-    info!("programs: {} embedded ({})", programs::count(),
-          programs::names().collect::<alloc::vec::Vec<_>>().join(" "));
+    info!(
+        "programs: {} embedded ({})",
+        programs::count(),
+        programs::names().collect::<alloc::vec::Vec<_>>().join(" ")
+    );
 
     // The test suite runs as a kernel task, so tests that block on a wait
     // queue or depend on preemption behave exactly as they would in

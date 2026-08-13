@@ -356,15 +356,18 @@ pub fn dump_tasks() {
     let snapshot: alloc::vec::Vec<_> = all.iter().filter_map(|w| w.upgrade()).collect();
     drop(all);
 
-    crate::println!("{:>5}  {:>5}  {:<10}  {:<9}  {:>3}  {}", "PID", "PPID", "NAME", "STATE", "LVL", "KSTACK");
+    crate::println!(
+        "{:>5}  {:>5}  {:<10}  {:<9}  {:>3}  {}",
+        "PID",
+        "PPID",
+        "NAME",
+        "STATE",
+        "LVL",
+        "KSTACK"
+    );
     for task in snapshot {
         let inner = task.inner.lock();
-        let ppid = inner
-            .parent
-            .as_ref()
-            .and_then(|p| p.upgrade())
-            .map(|p| p.pid.0)
-            .unwrap_or(0);
+        let ppid = inner.parent.as_ref().and_then(|p| p.upgrade()).map(|p| p.pid.0).unwrap_or(0);
         let headroom = inner.kstack.headroom(inner.ctx.sp);
         crate::println!(
             "{:>5}  {:>5}  {:<10}  {:<9}  {:>3}  {} B free",

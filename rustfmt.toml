@@ -1,0 +1,4 @@
+# Kernel code carries a lot of prose in comments and a lot of hex literals;
+# 100 columns keeps both readable without forcing awkward wrapping.
+max_width = 100
+use_small_heuristics = "Max"

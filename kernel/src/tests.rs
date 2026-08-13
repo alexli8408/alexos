@@ -349,8 +349,8 @@ ktest!(loader_accepts_an_embedded_program, {
     // The real check: every program the build embedded must actually load.
     for name in crate::programs::names() {
         let image = crate::programs::find(name).expect("named program is missing");
-        let loaded = crate::loader::load(image)
-            .unwrap_or_else(|e| panic!("{name} failed to load: {e:?}"));
+        let loaded =
+            crate::loader::load(image).unwrap_or_else(|e| panic!("{name} failed to load: {e:?}"));
         assert!(loaded.entry >= PAGE_SIZE, "{name} entry is in the null page");
         assert!(loaded.brk > loaded.entry, "{name} has no break above its image");
     }
@@ -476,10 +476,7 @@ ktest!(kernel_stack_canary_is_intact, {
     let inner = task.inner.lock();
     assert!(inner.kstack.canary_intact());
     assert!(inner.kstack.top() > inner.kstack.bottom());
-    assert_eq!(
-        inner.kstack.top() - inner.kstack.bottom(),
-        crate::config::KERNEL_STACK_SIZE
-    );
+    assert_eq!(inner.kstack.top() - inner.kstack.bottom(), crate::config::KERNEL_STACK_SIZE);
 });
 
 ktest!(arc_task_is_freed_when_dropped, {

@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # A kernel bug is far easier to find from the first bad frame than from the
+  # symptom three functions later.
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-and-test:
+    name: Build and boot
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the RISC-V toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add riscv64gc-unknown-none-elf
+          rustup component add rustfmt clippy llvm-tools
+          cargo install cargo-binutils --locked
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-misc
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Build the kernel and userland
+        run: make build
+
+      - name: Report image size
+        run: make size
+
+      # Boots the kernel under QEMU, runs the in-kernel suite, and exits through
+      # the SiFive test finisher. A failing assertion panics, which sets a
+      # non-zero exit status and fails the job.
+      - name: Run the kernel test suite
+        run: make test
+
+      # Drives the shell over the serial port and checks the output, which
+      # covers the parts a unit test cannot reach: the ELF loader, the user
+      # trap path, fork, exec and wait, all end to end.
+      - name: Run the userland integration test
+        run: ./scripts/integration-test.sh
+
+  lint:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the RISC-V toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add riscv64gc-unknown-none-elf
+          rustup component add clippy
+      - name: Clippy
+        run: cargo clippy --workspace --release -- -D warnings

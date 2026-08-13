@@ -195,9 +195,13 @@ fn sys_exec(path_ptr: usize, argv_ptr: usize) -> isize {
         return nr::ENOENT;
     };
 
+    use crate::task::process::ExecError;
     match crate::task::exec_current(&task, &path, image, &args) {
         Ok(()) => 0,
-        Err(()) => nr::ENOMEM,
+        // The image parsed but the space could not be built; the old image is
+        // already gone by then, so this is fatal to the process either way.
+        Err(ExecError::OutOfMemory) => nr::ENOMEM,
+        Err(ExecError::BadImage(_)) => nr::EINVAL,
     }
 }
 

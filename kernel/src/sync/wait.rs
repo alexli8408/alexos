@@ -23,8 +23,8 @@ use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::sync::SpinLock;
-use crate::task::scheduler::{self, current_task};
 use crate::task::Task;
+use crate::task::scheduler::{self, current_task};
 
 /// A set of tasks waiting for an event.
 pub struct WaitQueue {

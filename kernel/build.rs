@@ -1,7 +1,7 @@
 //! Points the linker at linker.ld with an absolute path, so the build works
 //! regardless of the directory cargo happens to be invoked from.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() {
     let dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -23,17 +23,17 @@ fn main() {
 /// `(name, include_bytes!(...))`. Generating this rather than hand-listing the
 /// programs means the kernel builds cleanly whether or not the user crate has
 /// been built yet -- an empty table is a valid outcome, not a build failure.
-fn embed_user_programs(kernel_dir: &PathBuf) {
+fn embed_user_programs(kernel_dir: &Path) {
     let build_dir = kernel_dir.join("../user/build");
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("programs.rs");
 
     let mut names: Vec<String> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&build_dir) {
         for entry in entries.flatten() {
-            if entry.path().is_file() {
-                if let Some(name) = entry.file_name().to_str() {
-                    names.push(name.to_string());
-                }
+            if entry.path().is_file()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                names.push(name.to_string());
             }
         }
     }

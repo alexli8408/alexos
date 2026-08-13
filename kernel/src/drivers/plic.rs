@@ -70,9 +70,7 @@ fn enable(hart: usize, irq: u32) {
 /// Set the minimum priority `hart` will accept. Zero accepts everything.
 fn set_threshold(hart: usize, threshold: u32) {
     // SAFETY: mapped device register.
-    unsafe {
-        reg(off::THRESHOLD + context(hart) * off::CONTEXT_STRIDE).write_volatile(threshold)
-    };
+    unsafe { reg(off::THRESHOLD + context(hart) * off::CONTEXT_STRIDE).write_volatile(threshold) };
 }
 
 /// Take the highest-priority pending interrupt, or `None` if there is none.
@@ -87,9 +85,7 @@ fn claim(hart: usize) -> Option<u32> {
 fn complete(hart: usize, irq: u32) {
     // SAFETY: mapped device register; writing back a claimed id is the
     // completion protocol.
-    unsafe {
-        reg(off::CLAIM + context(hart) * off::CONTEXT_STRIDE).write_volatile(irq)
-    };
+    unsafe { reg(off::CLAIM + context(hart) * off::CONTEXT_STRIDE).write_volatile(irq) };
 }
 
 /// Route the board's device interrupts to this hart.

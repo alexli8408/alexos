@@ -26,14 +26,7 @@ use crate::trap::TrapFrame;
 fn map_user_stack(space: &mut AddressSpace) -> Option<usize> {
     let top = VirtAddr(USER_STACK_TOP);
     let bottom = VirtAddr(USER_STACK_TOP - USER_STACK_SIZE);
-    space
-        .push(Region::new(
-            bottom,
-            top,
-            Backing::Framed,
-            PteFlags::RW | PteFlags::USER,
-        ))
-        .ok()?;
+    space.push(Region::new(bottom, top, Backing::Framed, PteFlags::RW | PteFlags::USER)).ok()?;
     Some(USER_STACK_TOP)
 }
 
@@ -42,7 +35,11 @@ fn map_user_stack(space: &mut AddressSpace) -> Option<usize> {
 /// The layout is the conventional one: the strings themselves at the top of the
 /// stack, then a NULL-terminated array of pointers to them, with everything
 /// 16-byte aligned because the RISC-V ABI requires it at function entry.
-fn push_args(space: &AddressSpace, mut sp: usize, args: &[String]) -> Option<(usize, usize, usize)> {
+fn push_args(
+    space: &AddressSpace,
+    mut sp: usize,
+    args: &[String],
+) -> Option<(usize, usize, usize)> {
     let mut pointers = Vec::with_capacity(args.len());
 
     for arg in args {
@@ -92,10 +89,7 @@ impl Task {
             child_exit: crate::sync::WaitQueue::new(),
             inner: crate::sync::SpinLock::new(TaskInner {
                 state: TaskState::Ready,
-                ctx: crate::task::TaskContext::new(
-                    crate::task::task_entry_addr(),
-                    kernel_sp,
-                ),
+                ctx: crate::task::TaskContext::new(crate::task::task_entry_addr(), kernel_sp),
                 kstack,
                 level: 0,
                 ticks: 0,
@@ -159,6 +153,19 @@ impl Task {
     }
 }
 
+/// Why an `exec` could not be completed.
+///
+/// Distinct from `LoadError` because the failures after a successful parse --
+/// no memory for a stack, no memory for the argument vector -- are the
+/// caller's problem in a different way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecError {
+    /// The image itself was rejected.
+    BadImage(loader::LoadError),
+    /// Ran out of memory building the new address space.
+    OutOfMemory,
+}
+
 /// Replace `task`'s image with `image`, keeping its pid and its place in the
 /// process tree.
 ///
@@ -166,14 +173,20 @@ impl Task {
 /// owned -- including the stack the caller's user-mode registers point into.
 /// That is safe only because the caller is running on its kernel stack and its
 /// user state is about to be overwritten wholesale.
-pub fn exec_current(task: &Arc<Task>, name: &str, image: &[u8], args: &[String]) -> Result<(), ()> {
+pub fn exec_current(
+    task: &Arc<Task>,
+    name: &str,
+    image: &[u8],
+    args: &[String],
+) -> Result<(), ExecError> {
     let loaded = loader::load(image).map_err(|e| {
         crate::warn!("exec {name}: {e:?}");
+        ExecError::BadImage(e)
     })?;
     let mut space = loaded.space;
 
-    let stack_top = map_user_stack(&mut space).ok_or(())?;
-    let (sp, argc, argv) = push_args(&space, stack_top, args).ok_or(())?;
+    let stack_top = map_user_stack(&mut space).ok_or(ExecError::OutOfMemory)?;
+    let (sp, argc, argv) = push_args(&space, stack_top, args).ok_or(ExecError::OutOfMemory)?;
 
     // The process keeps its pid and its place in the tree, but it is a
     // different program now and `ps` should say so.
@@ -223,7 +236,7 @@ pub fn adjust_brk(task: &Arc<Task>, delta: isize) -> Option<usize> {
     }
 
     let new = old.checked_add_signed(delta)?;
-    if new < USER_HEAP_BASE || new >= USER_MAX_ADDR {
+    if !(USER_HEAP_BASE..USER_MAX_ADDR).contains(&new) {
         return None;
     }
 
@@ -232,9 +245,7 @@ pub fn adjust_brk(task: &Arc<Task>, delta: isize) -> Option<usize> {
         let from = VirtAddr(inner.heap_top);
         let to = VirtAddr(new.next_multiple_of(PAGE_SIZE));
         let space = inner.space.as_mut()?;
-        space
-            .push(Region::new(from, to, Backing::Framed, PteFlags::RW | PteFlags::USER))
-            .ok()?;
+        space.push(Region::new(from, to, Backing::Framed, PteFlags::RW | PteFlags::USER)).ok()?;
         inner.heap_top = to.0;
     }
 

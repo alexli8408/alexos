@@ -157,9 +157,7 @@ unsafe impl GlobalAlloc for Heap {
             drop(heap);
             // SAFETY: the same layout produced this pointer, so it names the
             // start of a run of `2^order` frames from the buddy allocator.
-            unsafe {
-                free_frames(crate::mm::addr::VirtAddr(ptr as usize).to_phys().ppn(), order)
-            };
+            unsafe { free_frames(crate::mm::addr::VirtAddr(ptr as usize).to_phys().ppn(), order) };
             return;
         };
 

@@ -87,11 +87,7 @@ impl<T: ?Sized> SpinLock<T> {
             unsafe { arch::intr_disable() };
         }
 
-        if self
-            .locked
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_ok()
-        {
+        if self.locked.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok() {
             Some(SpinLockGuard { lock: self, restore_intr })
         } else {
             if restore_intr {

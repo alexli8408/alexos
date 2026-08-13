@@ -160,12 +160,10 @@ pub fn read_line(buf: &mut [u8]) -> usize {
                     write(nr::STDOUT, b"\x08 \x08");
                 }
             }
-            c if c.is_ascii_graphic() || c == b' ' => {
-                if len < buf.len() {
-                    buf[len] = c;
-                    len += 1;
-                    write(nr::STDOUT, &byte);
-                }
+            c if (c.is_ascii_graphic() || c == b' ') && len < buf.len() => {
+                buf[len] = c;
+                len += 1;
+                write(nr::STDOUT, &byte);
             }
             // Ignore anything else: control characters and escape sequences
             // would otherwise end up in the command line.
@@ -219,6 +217,9 @@ unsafe extern "Rust" {
 /// and `a1` = argv, matching the C convention.
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.entry")]
+// The pointer is not dereferenced here, only forwarded; `Args::new` is the
+// unsafe boundary that vouches for it.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn _start(argc: usize, argv: *const *const u8) -> ! {
     // SAFETY: `__alexos_main` is defined by the program's `entry!` invocation,
     // and the kernel set up argc/argv before the first instruction ran.

@@ -222,9 +222,7 @@ impl PageTable {
     pub fn new() -> Option<Self> {
         let frame = Frame::alloc()?;
         let root = frame.ppn();
-        let mut frames = Vec::new();
-        frames.push(frame);
-        Some(Self { root, frames })
+        Some(Self { root, frames: alloc::vec![frame] })
     }
 
     /// Frame number of the root table.
@@ -317,7 +315,12 @@ impl PageTable {
     ///
     /// `VALID` is implied. `ACCESSED`/`DIRTY` are set eagerly because not every
     /// implementation updates them in hardware, and a cleared bit faults.
-    pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PteFlags) -> Result<(), MapError> {
+    pub fn map(
+        &mut self,
+        vpn: VirtPageNum,
+        ppn: PhysPageNum,
+        flags: PteFlags,
+    ) -> Result<(), MapError> {
         self.map_at_level(vpn, ppn, flags, SV39_LEVELS - 1)
     }
 
@@ -337,8 +340,8 @@ impl PageTable {
     ) -> Result<(), MapError> {
         debug_assert!(level < SV39_LEVELS);
         let pages = Self::level_page_size(level) >> crate::config::PAGE_SHIFT;
-        debug_assert!(vpn.0 % pages == 0, "misaligned virtual page for level {level}");
-        debug_assert!(ppn.0 % pages == 0, "misaligned frame for level {level}");
+        debug_assert!(vpn.0.is_multiple_of(pages), "misaligned virtual page for level {level}");
+        debug_assert!(ppn.0.is_multiple_of(pages), "misaligned frame for level {level}");
 
         let pte = self.walk_create_to(vpn, level).ok_or(MapError::OutOfMemory)?;
         if pte.is_valid() {

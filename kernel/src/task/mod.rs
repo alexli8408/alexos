@@ -221,4 +221,3 @@ pub(crate) fn task_entry_addr() -> usize {
 pub(crate) fn enter_user_mode() {
     process::user_entry()
 }
-

@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 use crate::arch;
 use crate::config::{
     CLINT_BASE, DRAM_BASE, DRAM_SIZE, PAGE_SIZE, PLIC_BASE, TEST_DEVICE_BASE, UART_BASE,
-    VIRTIO_MMIO_BASE, VIRTIO_MMIO_SLOTS, VIRTIO_MMIO_STRIDE, VIRT_OFFSET,
+    VIRT_OFFSET, VIRTIO_MMIO_BASE, VIRTIO_MMIO_SLOTS, VIRTIO_MMIO_STRIDE,
 };
 use crate::mm::addr::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use crate::mm::frame::Frame;
@@ -104,7 +104,10 @@ impl Region {
                     // DRAM: less page-table memory, and 512x fewer TLB entries
                     // to cover the same range.
                     let pages = SUPERPAGE_SIZE / PAGE_SIZE;
-                    if vpn.0 % pages == 0 && ppn.0 % pages == 0 && vpn.0 + pages <= end.0 {
+                    if vpn.0.is_multiple_of(pages)
+                        && ppn.0.is_multiple_of(pages)
+                        && vpn.0 + pages <= end.0
+                    {
                         table.map_at_level(vpn, ppn, self.perm, 1)?;
                         vpn = VirtPageNum(vpn.0 + pages);
                         continue;
