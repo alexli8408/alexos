@@ -4,8 +4,9 @@
 //! page offset. A walk starts at the frame in `satp` and follows non-leaf
 //! entries down; an entry with any of R/W/X set is a leaf and terminates the
 //! walk, which is what makes 2 MiB and 1 GiB superpages possible at levels 1
-//! and 0. The kernel maps 4 KiB pages everywhere except the boot table, so the
-//! code below always walks to level 2.
+//! and 0. The kernel maps 4 KiB pages for everything it has to control at page
+//! granularity, and 2 MiB leaves for the linear map, where one entry covering
+//! 512 pages is a large saving in both table memory and TLB reach.
 //!
 //! A `PageTable` owns every frame it touches -- root and interior alike -- so
 //! destroying an address space is just dropping the struct.
@@ -236,8 +237,10 @@ impl PageTable {
         (8usize << 60) | self.root.0
     }
 
-    /// Walk to `vpn`'s leaf slot, allocating interior tables as needed.
-    fn walk_create(&mut self, vpn: VirtPageNum) -> Option<&mut Pte> {
+    /// Walk to `vpn`'s slot at `stop_level`, allocating interior tables as
+    /// needed. `stop_level` 2 yields a 4 KiB slot, 1 a 2 MiB slot, 0 a 1 GiB
+    /// slot.
+    fn walk_create_to(&mut self, vpn: VirtPageNum, stop_level: usize) -> Option<&mut Pte> {
         let indices = vpn.indices();
         let mut ppn = self.root;
 
@@ -245,7 +248,7 @@ impl PageTable {
             // SAFETY: `ppn` is a table frame owned by this object, so it holds
             // PTE_PER_TABLE entries reachable through the direct map.
             let entries = unsafe { table_at(ppn) };
-            if level == SV39_LEVELS - 1 {
+            if level == stop_level {
                 return Some(&mut entries[index]);
             }
             if !entries[index].is_valid() {
@@ -258,6 +261,12 @@ impl PageTable {
             ppn = entries[index].ppn();
         }
         unreachable!("Sv39 walk ran past the leaf level")
+    }
+
+    /// Page-size granularity of a leaf installed at each level.
+    const fn level_page_size(level: usize) -> usize {
+        // level 0 -> 1 GiB, 1 -> 2 MiB, 2 -> 4 KiB
+        1 << (crate::config::PAGE_SHIFT + 9 * (SV39_LEVELS - 1 - level))
     }
 
     /// Locate `vpn`'s leaf slot without allocating.
@@ -309,7 +318,29 @@ impl PageTable {
     /// `VALID` is implied. `ACCESSED`/`DIRTY` are set eagerly because not every
     /// implementation updates them in hardware, and a cleared bit faults.
     pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PteFlags) -> Result<(), MapError> {
-        let pte = self.walk_create(vpn).ok_or(MapError::OutOfMemory)?;
+        self.map_at_level(vpn, ppn, flags, SV39_LEVELS - 1)
+    }
+
+    /// Map a leaf at an arbitrary level, creating a superpage when `level < 2`.
+    ///
+    /// A leaf above the bottom level covers 2 MiB (level 1) or 1 GiB (level 0)
+    /// in a single entry. The kernel uses level-1 leaves for the linear map,
+    /// where it cuts both page-table memory and TLB pressure by 512x; the
+    /// hardware requires the physical frame to be aligned to the same size,
+    /// which is asserted here rather than silently mis-mapped.
+    pub fn map_at_level(
+        &mut self,
+        vpn: VirtPageNum,
+        ppn: PhysPageNum,
+        flags: PteFlags,
+        level: usize,
+    ) -> Result<(), MapError> {
+        debug_assert!(level < SV39_LEVELS);
+        let pages = Self::level_page_size(level) >> crate::config::PAGE_SHIFT;
+        debug_assert!(vpn.0 % pages == 0, "misaligned virtual page for level {level}");
+        debug_assert!(ppn.0 % pages == 0, "misaligned frame for level {level}");
+
+        let pte = self.walk_create_to(vpn, level).ok_or(MapError::OutOfMemory)?;
         if pte.is_valid() {
             return Err(MapError::AlreadyMapped);
         }
