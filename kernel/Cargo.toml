@@ -1,0 +1,24 @@
+[package]
+name = "alexos-kernel"
+description = "A preemptive multitasking RISC-V 64 kernel written from scratch in Rust"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "alexos"
+path = "src/main.rs"
+test = false
+bench = false
+
+[features]
+default = []
+# Very high volume tracing, compiled out unless requested.
+trace = []
+# Make a panic exit QEMU with a failure status instead of powering off cleanly.
+# `make test` turns this on so a panicking kernel fails CI.
+exit-on-panic = []
+
+[dependencies]

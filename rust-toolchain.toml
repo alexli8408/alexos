@@ -1,0 +1,9 @@
+# AlexOS builds on stable Rust. No nightly features are used anywhere in the
+# kernel -- naked functions, inline asm and `global_asm!` all stabilised, and
+# the test harness is hand-rolled (see kernel/src/ktest.rs) rather than relying
+# on `#![feature(custom_test_frameworks)]`.
+[toolchain]
+channel = "stable"
+components = ["rust-src", "llvm-tools", "rustfmt", "clippy"]
+targets = ["riscv64gc-unknown-none-elf"]
+profile = "minimal"

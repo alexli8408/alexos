@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["kernel"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Alex Li <alexli8408@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/alexli8408/alexos"
+
+# The kernel is always built with these settings: unwinding has no meaning
+# without a runtime, and `debug = true` keeps DWARF in the ELF so `make gdb`
+# can show source lines while the flat binary handed to QEMU stays small.
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+debug = true
+overflow-checks = true
+
+[profile.dev]
+panic = "abort"
+debug = true

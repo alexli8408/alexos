@@ -1,0 +1,15 @@
+[build]
+target = "riscv64gc-unknown-none-elf"
+
+[target.riscv64gc-unknown-none-elf]
+rustflags = [
+    # Kernel backtraces walk the frame-pointer chain (see kernel/src/backtrace.rs),
+    # which only works if every frame actually keeps one.
+    "-C", "force-frame-pointers=yes",
+    # The kernel lives above 0xffffffc000000000, far outside the +/-2 GiB that
+    # the default `medlow` model can reach with a single lui+addi pair.
+    "-C", "code-model=medium",
+]
+
+[alias]
+kbuild = "build -p alexos-kernel --release"
