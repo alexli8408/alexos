@@ -110,10 +110,19 @@ pub fn current_task() -> Arc<Task> {
 /// Create a kernel task and make it runnable.
 pub fn spawn(name: &str, entry: fn()) -> Option<Arc<Task>> {
     let task = Task::new_kernel(name, entry)?;
+    admit(task.clone());
+    Some(task)
+}
+
+/// Put an already-built task on the run queue.
+///
+/// Used by `fork` and by the user-process constructor, which do their own
+/// setup and hand over a task that is ready to run.
+pub fn admit(task: Arc<Task>) {
+    ALL_TASKS.lock().push(Arc::downgrade(&task));
     let mut queue = RUN_QUEUE.lock();
     queue.spawned += 1;
-    queue.push(task.clone(), 0);
-    Some(task)
+    queue.push(task, 0);
 }
 
 /// Make a blocked task runnable again.
@@ -160,6 +169,22 @@ pub fn block_current() {
 pub fn exit_current(code: i32) -> ! {
     if let Some(task) = current() {
         task.inner.lock().exit_code = code;
+
+        // Release the address space now rather than at reap time. A zombie
+        // exists only to carry an exit code; keeping its page tables and every
+        // frame it mapped alive until the parent gets around to waitpid is a
+        // large amount of memory held for no reason.
+        let space = task.inner.lock().space.take();
+        if let Some(space) = space {
+            // Switch off it before dropping it -- we are still running with it
+            // installed, and freeing the page table under ourselves would fault
+            // on the next instruction.
+            // SAFETY: the kernel space maps this stack and all kernel text.
+            unsafe { crate::mm::space::activate_kernel() };
+            drop(space);
+        }
+
+        crate::task::process::on_exit(&task);
     }
     switch_to_idle(TaskState::Zombie);
     unreachable!("a zombie task was scheduled again");
@@ -229,7 +254,7 @@ fn switch_to_idle(state: TaskState) {
             };
 
             if !inner.kstack.canary_intact() {
-                panic!("kernel stack overflow in task {} ({})", task.pid, task.name);
+                panic!("kernel stack overflow in task {} ({})", task.pid, *task.name.lock());
             }
             &raw mut inner.ctx
         };
@@ -293,6 +318,15 @@ pub fn run() -> ! {
             continue;
         };
 
+        // Install this task's address space before switching to it. Kernel
+        // tasks run in the kernel space; a user task runs in its own, whose
+        // upper half is the same kernel mapping, so the switch is safe from
+        // any point in kernel code.
+        let token = crate::task::process::space_token(&task);
+        // SAFETY: every space the scheduler can pick has the kernel half
+        // mapped, so this stack and this code stay addressable.
+        unsafe { crate::mm::space::activate_token(token) };
+
         let ctx = {
             let mut inner = task.inner.lock();
             inner.state = TaskState::Running;
@@ -305,6 +339,42 @@ pub fn run() -> ! {
         // is this hart's own context. Control comes back here when that task
         // switches away.
         unsafe { switch_context(cpu.idle.get(), ctx) };
+    }
+}
+
+/// Every task ever admitted, weakly, so `ps` can list them without keeping
+/// dead ones alive.
+static ALL_TASKS: SpinLock<alloc::vec::Vec<alloc::sync::Weak<Task>>> =
+    SpinLock::new(alloc::vec::Vec::new());
+
+/// Print one line per live task.
+pub fn dump_tasks() {
+    let mut all = ALL_TASKS.lock();
+    // Drop references to tasks that have been freed; this is the only place
+    // the list is pruned, which keeps `admit` on the fast path.
+    all.retain(|w| w.strong_count() > 0);
+    let snapshot: alloc::vec::Vec<_> = all.iter().filter_map(|w| w.upgrade()).collect();
+    drop(all);
+
+    crate::println!("{:>5}  {:>5}  {:<10}  {:<9}  {:>3}  {}", "PID", "PPID", "NAME", "STATE", "LVL", "KSTACK");
+    for task in snapshot {
+        let inner = task.inner.lock();
+        let ppid = inner
+            .parent
+            .as_ref()
+            .and_then(|p| p.upgrade())
+            .map(|p| p.pid.0)
+            .unwrap_or(0);
+        let headroom = inner.kstack.headroom(inner.ctx.sp);
+        crate::println!(
+            "{:>5}  {:>5}  {:<10}  {:<9}  {:>3}  {} B free",
+            task.pid.0,
+            ppid,
+            *task.name.lock(),
+            alloc::format!("{:?}", inner.state),
+            inner.level,
+            headroom
+        );
     }
 }
 

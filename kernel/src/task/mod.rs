@@ -11,18 +11,22 @@
 //! scheduling on another.
 
 pub mod context;
+pub mod process;
 pub mod scheduler;
 
+use alloc::boxed::Box;
 use alloc::string::String;
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::sync::SpinLock;
+use crate::mm::space::AddressSpace;
+use crate::sync::{SpinLock, WaitQueue};
+use crate::trap::TrapFrame;
 
 pub use context::{KernelStack, TaskContext, switch_context};
-pub use scheduler::{
-    block_current, current, exit_current, spawn, wake, yield_now,
-};
+pub use process::{adjust_brk, exec_current};
+pub use scheduler::{admit, block_current, current, exit_current, spawn, wake, yield_now};
 
 /// A process identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -41,7 +45,7 @@ impl core::fmt::Display for Pid {
 /// and 2^64 ids is enough that wrapping is not a real concern.
 static NEXT_PID: AtomicUsize = AtomicUsize::new(1);
 
-fn alloc_pid() -> Pid {
+pub(crate) fn alloc_pid() -> Pid {
     Pid(NEXT_PID.fetch_add(1, Ordering::Relaxed))
 }
 
@@ -88,16 +92,38 @@ pub struct TaskInner {
     pub wakeup_pending: bool,
     /// Value passed to `exit`.
     pub exit_code: i32,
+
+    // ---- user process state; all None for a pure kernel task ----
+    /// The address space this task runs in.
+    pub space: Option<AddressSpace>,
+    /// Saved user registers. Heap-allocated because `sscratch` must point at it
+    /// for the whole time user code runs, and a frame on the kernel stack would
+    /// move on every reschedule.
+    pub frame: Option<Box<TrapFrame>>,
+    /// Program break: the top of the heap as `sbrk` sees it.
+    pub brk: usize,
+    /// Highest address actually backed by frames. `brk` may sit below this
+    /// after a shrink, so growth only allocates when it passes this mark.
+    pub heap_top: usize,
+    /// Weak so that a child holding a reference cannot keep a dead parent's
+    /// address space alive.
+    pub parent: Option<Weak<Task>>,
+    /// Children, alive or zombie, until `waitpid` reaps them.
+    pub children: Vec<Arc<Task>>,
 }
 
 /// A schedulable thread of control.
 pub struct Task {
     /// Immutable identity.
     pub pid: Pid,
-    /// Human-readable name, for `ps` and panic messages.
-    pub name: String,
+    /// Human-readable name, for `ps` and panic messages. Behind a lock because
+    /// `exec` replaces it: a forked child is a copy of its parent right up
+    /// until it becomes a different program.
+    pub name: SpinLock<String>,
     /// What this task runs. Read by the entry trampoline.
     pub entry: fn(),
+    /// Woken whenever one of this task's children exits, so `waitpid` can sleep.
+    pub child_exit: WaitQueue,
     /// Everything that changes.
     pub inner: SpinLock<TaskInner>,
 }
@@ -120,8 +146,9 @@ impl Task {
 
         Some(Arc::new(Self {
             pid: alloc_pid(),
-            name: String::from(name),
+            name: SpinLock::new(String::from(name)),
             entry,
+            child_exit: WaitQueue::new(),
             inner: SpinLock::new(TaskInner {
                 state: TaskState::Ready,
                 ctx,
@@ -131,6 +158,12 @@ impl Task {
                 needs_resched: false,
                 wakeup_pending: false,
                 exit_code: 0,
+                space: None,
+                frame: None,
+                brk: 0,
+                heap_top: 0,
+                parent: None,
+                children: Vec::new(),
             }),
         }))
     }
@@ -154,7 +187,7 @@ impl Task {
 impl core::fmt::Debug for Task {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let inner = self.inner.lock();
-        write!(f, "Task({} {:?} L{} {:?})", self.pid, self.name, inner.level, inner.state)
+        write!(f, "Task({} {:?} L{} {:?})", self.pid, *self.name.lock(), inner.level, inner.state)
     }
 }
 
@@ -166,7 +199,7 @@ impl core::fmt::Debug for Task {
 /// Interrupts are enabled here rather than in the scheduler because the switch
 /// happens with them masked -- the run queue lock requires it -- and a task
 /// that started with them masked could never be preempted.
-extern "C" fn task_entry() -> ! {
+pub(crate) extern "C" fn task_entry() -> ! {
     // The scheduler made this task current before switching in, so the entry
     // point is reachable without smuggling anything through a register.
     let entry = scheduler::current_task().entry;
@@ -178,3 +211,14 @@ extern "C" fn task_entry() -> ! {
 
     exit_current(0)
 }
+
+/// Address of the entry trampoline, for building a fresh `TaskContext`.
+pub(crate) fn task_entry_addr() -> usize {
+    task_entry as *const () as usize
+}
+
+/// Entry point of a user task: drops to user mode and never comes back.
+pub(crate) fn enter_user_mode() {
+    process::user_entry()
+}
+

@@ -46,14 +46,14 @@ pub enum Backing {
 
 /// A contiguous range of virtual pages sharing a backing and permissions.
 pub struct Region {
-    start: VirtAddr,
-    end: VirtAddr,
-    backing: Backing,
-    perm: PteFlags,
+    pub(crate) start: VirtAddr,
+    pub(crate) end: VirtAddr,
+    pub(crate) backing: Backing,
+    pub(crate) perm: PteFlags,
     /// Frames owned by this region, for `Backing::Framed`. Indexed by page so
     /// that a partial unmap or a copy-on-write fault can find one page's frame
     /// without scanning.
-    frames: BTreeMap<VirtPageNum, Frame>,
+    pub(crate) frames: BTreeMap<VirtPageNum, Frame>,
 }
 
 impl Region {
@@ -89,7 +89,7 @@ impl Region {
     }
 
     /// Install every page of this region into `table`.
-    fn map_into(&mut self, table: &mut PageTable) -> Result<(), MapError> {
+    pub(crate) fn map_into(&mut self, table: &mut PageTable) -> Result<(), MapError> {
         let mut vpn = self.start.vpn();
         let end = self.end.vpn();
 
@@ -183,12 +183,145 @@ impl AddressSpace {
         Ok(())
     }
 
-    /// Map `region` and seed its first page with `data`.
-    pub fn push_with_data(&mut self, mut region: Region, data: &[u8]) -> Result<(), MapError> {
+    /// Map `region` and copy `data` into it starting `offset` bytes in.
+    ///
+    /// The offset exists because an ELF segment is page-aligned in memory but
+    /// its contents start at whatever sub-page offset the file gives it.
+    pub fn push_with_offset(
+        &mut self,
+        mut region: Region,
+        offset: usize,
+        data: &[u8],
+    ) -> Result<(), MapError> {
         region.map_into(&mut self.table)?;
-        region.write_data(0, data);
+        region.write_data(offset, data);
         self.regions.push(region);
         Ok(())
+    }
+
+    /// Give this space the kernel's upper-half mappings.
+    ///
+    /// Every user space needs these: the trap handler runs with the faulting
+    /// task's page table still installed, so kernel text, stacks and the linear
+    /// map all have to be reachable from it.
+    pub fn map_kernel_half(&mut self) -> Result<(), MapError> {
+        let kernel = KERNEL_SPACE.lock();
+        let kernel = kernel.as_ref().expect("kernel space not built yet");
+        self.table.share_upper_half(kernel.table());
+        Ok(())
+    }
+
+    /// Regions in this space, for fork and for diagnostics.
+    pub fn regions(&self) -> &[Region] {
+        &self.regions
+    }
+
+    /// Duplicate this space: same layout, freshly allocated frames with the
+    /// same contents.
+    ///
+    /// This is the eager half of `fork`. Copy-on-write would avoid the copy for
+    /// pages that are never written -- which, given fork is usually followed by
+    /// exec, is most of them -- and the PTE bit for it is already defined. The
+    /// eager copy is correct and simple; the optimisation is not yet wired up.
+    pub fn duplicate(&self) -> Option<Self> {
+        let mut child = Self::new()?;
+        child.map_kernel_half().ok()?;
+
+        for region in &self.regions {
+            if region.backing != Backing::Framed {
+                // Linear regions are the kernel's, already shared above.
+                continue;
+            }
+            let mut copy = Region::new(region.start, region.end, Backing::Framed, region.perm);
+            copy.map_into(&mut child.table).ok()?;
+
+            for (&vpn, frame) in &region.frames {
+                let dst = copy.frames.get(&vpn)?;
+                // SAFETY: both frames are owned by their regions, are exactly
+                // one page, and are distinct allocations.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        frame.ppn().as_ptr(),
+                        dst.ppn().as_ptr(),
+                        PAGE_SIZE,
+                    );
+                }
+            }
+            child.regions.push(copy);
+        }
+        Some(child)
+    }
+
+    /// Copy `len` bytes out of this space at `addr` into `dst`.
+    ///
+    /// Walks the page table and copies through the linear map rather than
+    /// dereferencing the user pointer, so it works whether or not this space is
+    /// the one currently installed, and a bad address returns None instead of
+    /// faulting in the kernel.
+    pub fn copy_from_user(&self, addr: VirtAddr, dst: &mut [u8]) -> Option<()> {
+        let mut copied = 0;
+        while copied < dst.len() {
+            let va = VirtAddr(addr.0.checked_add(copied)?);
+            if va.0 >= crate::config::USER_MAX_ADDR {
+                return None;
+            }
+            let pa = self.table.translate_addr(va)?;
+            let n = (PAGE_SIZE - va.page_offset()).min(dst.len() - copied);
+            // SAFETY: `pa` came from a valid mapping, so the linear map covers
+            // it, and `n` stays inside the page.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    pa.to_virt().0 as *const u8,
+                    dst.as_mut_ptr().add(copied),
+                    n,
+                );
+            }
+            copied += n;
+        }
+        Some(())
+    }
+
+    /// Copy `src` into this space at `addr`.
+    pub fn copy_to_user(&self, addr: VirtAddr, src: &[u8]) -> Option<()> {
+        let mut copied = 0;
+        while copied < src.len() {
+            let va = VirtAddr(addr.0.checked_add(copied)?);
+            if va.0 >= crate::config::USER_MAX_ADDR {
+                return None;
+            }
+            let pte = self.table.translate(va.vpn())?;
+            // Refuse to write through a mapping the user itself could not
+            // write: a syscall must not be a way around page permissions.
+            if !pte.flags().contains(PteFlags::WRITE | PteFlags::USER) {
+                return None;
+            }
+            let pa = self.table.translate_addr(va)?;
+            let n = (PAGE_SIZE - va.page_offset()).min(src.len() - copied);
+            // SAFETY: as above, plus the write permission check.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    src.as_ptr().add(copied),
+                    pa.to_virt().0 as *mut u8,
+                    n,
+                );
+            }
+            copied += n;
+        }
+        Some(())
+    }
+
+    /// Read a NUL-terminated string of at most `max` bytes from user memory.
+    pub fn read_cstr(&self, addr: VirtAddr, max: usize) -> Option<alloc::string::String> {
+        let mut bytes = alloc::vec::Vec::new();
+        for i in 0..max {
+            let mut byte = [0u8; 1];
+            self.copy_from_user(VirtAddr(addr.0.checked_add(i)?), &mut byte)?;
+            if byte[0] == 0 {
+                return alloc::string::String::from_utf8(bytes).ok();
+            }
+            bytes.push(byte[0]);
+        }
+        None
     }
 
     /// The `satp` value that activates this space.
@@ -315,6 +448,37 @@ pub unsafe fn init_kernel_space() {
 
     *KERNEL_SPACE.lock() = Some(space);
     crate::info!("kernel space active, {table_frames} page-table frames, boot table retired");
+}
+
+/// `satp` value for the kernel address space.
+pub fn kernel_token() -> usize {
+    KERNEL_SPACE.lock().as_ref().expect("kernel space not built yet").token()
+}
+
+/// Install an arbitrary `satp` value and flush the TLB.
+///
+/// # Safety
+/// The space must map the kernel half, or the next instruction faults.
+pub unsafe fn activate_token(token: usize) {
+    if arch::satp::read() == token {
+        // Skip the fence when nothing changes. Rescheduling between two kernel
+        // tasks is the common case, and a full TLB flush there would throw away
+        // the whole working set for nothing.
+        return;
+    }
+    // SAFETY: contract delegated to the caller.
+    unsafe { arch::satp::write(token) };
+    arch::sfence_vma_all();
+}
+
+/// Switch to the kernel address space.
+///
+/// # Safety
+/// Only valid from kernel code running on a kernel stack.
+pub unsafe fn activate_kernel() {
+    let token = kernel_token();
+    // SAFETY: the kernel space maps all kernel text, stacks and devices.
+    unsafe { activate_token(token) };
 }
 
 /// Address of a linker-emitted symbol.

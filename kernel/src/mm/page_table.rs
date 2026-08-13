@@ -388,6 +388,27 @@ impl PageTable {
         self.walk_mut(vpn).filter(|pte| pte.is_valid())
     }
 
+    /// Copy the upper-half root entries of `kernel` into this table.
+    ///
+    /// Sv39 root entry *i* covers 1 GiB, and entries 256 and above are the
+    /// upper half -- the kernel. Sharing those entries rather than duplicating
+    /// the mappings means every address space sees the same kernel at the same
+    /// addresses, which is what lets a trap from user mode run kernel code
+    /// without first switching satp.
+    ///
+    /// The interior tables below these entries are shared, not owned, so this
+    /// table's Drop will not free them.
+    pub fn share_upper_half(&mut self, kernel: &PageTable) {
+        // SAFETY: both frames are root tables owned by their respective
+        // objects, and the halves being copied do not overlap this table's own
+        // user mappings.
+        unsafe {
+            let dst = table_at(self.root);
+            let src = table_at(kernel.root);
+            dst[PTE_PER_TABLE / 2..].copy_from_slice(&src[PTE_PER_TABLE / 2..]);
+        }
+    }
+
     /// Number of frames this table occupies, root and interior included.
     pub fn table_frames(&self) -> usize {
         self.frames.len()
