@@ -1,11 +1,21 @@
 //! Memory management.
 //!
-//! `addr` gives every address a type. Mixing up a physical address, a virtual
-//! address and a page number is the classic way to lose a weekend to a kernel
-//! bug, so they are four distinct newtypes and every conversion is explicit.
+//! Layered bottom-up, and the order matters because each layer is built out of
+//! the one below it:
+//!
+//! ```text
+//!   addr        typed addresses and page numbers
+//!   frame       buddy allocator over physical DRAM
+//!   heap        size-class allocator backing `alloc`, refilled from frames
+//! ```
+//!
+//! `init` follows exactly that order. Nothing above the frame allocator may
+//! run before it, which is why the heap cannot simply be a static array: it
+//! would have to be sized for the worst case and would waste the difference.
 
 pub mod addr;
 pub mod frame;
+pub mod heap;
 
 pub use addr::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 
@@ -53,10 +63,10 @@ pub fn kernel_image_size() -> usize {
     (&raw const __kernel_end as usize) - (&raw const __kernel_start as usize)
 }
 
-/// Bring up physical memory management.
+/// Bring up physical memory management and the kernel heap.
 ///
 /// # Safety
-/// Call exactly once, on the boot hart, before any frame is allocated.
+/// Call exactly once, on the boot hart, before any allocation.
 pub unsafe fn init() {
     let dram_end = PhysAddr(DRAM_BASE + DRAM_SIZE);
 
@@ -64,7 +74,9 @@ pub unsafe fn init() {
     // is unused, and the boot page table direct-maps all of it.
     unsafe { frame::init(dram_end) };
 
-    let total = frame::FRAME_ALLOCATOR.lock().total_frames();
+    let allocator = frame::FRAME_ALLOCATOR.lock();
+    let total = allocator.total_frames();
+    drop(allocator);
     crate::info!(
         "frames: {} usable ({} MiB) from {:#x} to {:#x}",
         total,
@@ -72,4 +84,8 @@ pub unsafe fn init() {
         kernel_end_phys(),
         dram_end.0
     );
+
+    heap::self_test();
+    let (used, reserved) = heap::stats();
+    crate::info!("heap: self-test passed, {used} B live / {reserved} B reserved");
 }

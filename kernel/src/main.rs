@@ -17,6 +17,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+extern crate alloc;
+
 core::arch::global_asm!(include_str!("entry.S"));
 
 #[macro_use]
