@@ -39,6 +39,11 @@ pub fn init() {
 pub fn on_tick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
 
+    // Account the quantum against the running task. This only sets a flag; the
+    // switch happens on the way out of the trap, where the stack is safe to
+    // leave. See scheduler::resched_if_needed.
+    crate::task::scheduler::on_timer_tick();
+
     // Advance the deadline rather than recomputing from now, so a late handler
     // does not stretch the period permanently. If the kernel fell so far behind
     // that the new deadline is already in the past, skip forward to avoid a

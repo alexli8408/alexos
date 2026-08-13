@@ -141,6 +141,11 @@ pub extern "C" fn kernel_trap_handler(frame: &mut TrapFrame) {
         }
         _ => fatal(frame, cause, stval),
     }
+
+    // Act on an expired quantum here rather than inside the timer handler. By
+    // now the trap frame is fully built on this task's kernel stack, so
+    // switching away and coming back later resumes exactly where we left off.
+    crate::task::scheduler::resched_if_needed();
 }
 
 /// Report an unrecoverable supervisor trap and stop.
