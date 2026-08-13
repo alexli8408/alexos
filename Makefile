@@ -37,9 +37,21 @@ all: build
 
 build: $(KERNEL_BIN)
 
-$(KERNEL_BIN): FORCE
+# User programs must be built and staged before the kernel, whose build script
+# embeds whatever it finds in user/build/.
+$(KERNEL_BIN): user FORCE
 	cargo build -p alexos-kernel --$(PROFILE)
 	$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
+
+.PHONY: user
+user:
+	@cargo build -p alexos-user --$(PROFILE) 2>&1 | grep -v '^$$' || true
+	@mkdir -p user/build
+	@rm -f user/build/*
+	@for prog in $$(ls user/src/bin | sed 's/\.rs$$//'); do \
+		cp target/$(TARGET)/$(PROFILE)/$$prog user/build/$$prog; \
+	done
+	@echo "staged $$(ls user/build | wc -l | tr -d ' ') user programs"
 
 FORCE:
 
@@ -86,7 +98,7 @@ sym:
 
 clean:
 	cargo clean
-	rm -f $(KERNEL_BIN) $(FS_IMG)
+	rm -rf $(KERNEL_BIN) $(FS_IMG) user/build
 
 help:
 	@grep -E '^#   ' Makefile | sed 's/^#   //'

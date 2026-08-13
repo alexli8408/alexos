@@ -1,0 +1,16 @@
+[package]
+name = "alexos-user"
+description = "Userland runtime and programs for AlexOS"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "alexos_user"
+path = "src/lib.rs"
+test = false
+bench = false
+
+[dependencies]
