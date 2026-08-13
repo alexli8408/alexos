@@ -19,9 +19,11 @@ pub mod addr;
 pub mod frame;
 pub mod heap;
 pub mod page_table;
+pub mod space;
 
 pub use addr::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 pub use page_table::{MapError, PageTable, Pte, PteFlags};
+pub use space::{AddressSpace, Backing, Region};
 
 use crate::config::{DRAM_BASE, DRAM_SIZE, VIRT_OFFSET};
 
@@ -93,4 +95,7 @@ pub unsafe fn init() {
     heap::self_test();
     let (used, reserved) = heap::stats();
     crate::info!("heap: self-test passed, {used} B live / {reserved} B reserved");
+
+    // SAFETY: frames and heap are up, so the page table can allocate.
+    unsafe { space::init_kernel_space() };
 }
