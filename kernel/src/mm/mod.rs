@@ -7,6 +7,8 @@
 //!   addr        typed addresses and page numbers
 //!   frame       buddy allocator over physical DRAM
 //!   heap        size-class allocator backing `alloc`, refilled from frames
+//!   page_table  Sv39 walks; needs `alloc` to own its interior tables
+//!   space       address spaces composed of mapped regions
 //! ```
 //!
 //! `init` follows exactly that order. Nothing above the frame allocator may
@@ -16,8 +18,10 @@
 pub mod addr;
 pub mod frame;
 pub mod heap;
+pub mod page_table;
 
 pub use addr::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
+pub use page_table::{MapError, PageTable, Pte, PteFlags};
 
 use crate::config::{DRAM_BASE, DRAM_SIZE, VIRT_OFFSET};
 
@@ -40,7 +44,8 @@ unsafe extern "C" {
 /// Translate a kernel virtual address in the direct map to its physical address.
 ///
 /// Only valid for direct-mapped addresses -- that is, the kernel image and the
-/// physical-memory window. User addresses need a page-table walk instead.
+/// physical-memory window. User addresses need a page-table walk instead; see
+/// [`PageTable::translate_addr`].
 #[inline(always)]
 pub const fn virt_to_phys(vaddr: usize) -> usize {
     vaddr - VIRT_OFFSET
@@ -63,7 +68,7 @@ pub fn kernel_image_size() -> usize {
     (&raw const __kernel_end as usize) - (&raw const __kernel_start as usize)
 }
 
-/// Bring up physical memory management and the kernel heap.
+/// Bring up physical and virtual memory management.
 ///
 /// # Safety
 /// Call exactly once, on the boot hart, before any allocation.
