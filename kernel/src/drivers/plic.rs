@@ -118,9 +118,9 @@ pub fn handle_external_interrupt() {
         match irq {
             UART_IRQ => {
                 if crate::drivers::uart::handle_interrupt() > 0 {
-                    // Waking from interrupt context is safe: it only touches
-                    // spin locks and never blocks.
-                    crate::main_wake_console();
+                    // Safe from interrupt context: waking only touches spin
+                    // locks and never blocks.
+                    crate::drivers::uart::notify_readers();
                 }
             }
             other => {

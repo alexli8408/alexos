@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::UART_BASE;
 use crate::mm::phys_to_virt;
-use crate::sync::SpinLock;
+use crate::sync::{SpinLock, WaitQueue};
 
 /// Register offsets. The `virt` board wires the 16550 with a one-byte stride.
 mod reg {
@@ -60,6 +60,12 @@ mod fcr {
 /// Serialises access to the device registers.
 static UART: SpinLock<Uart> = SpinLock::new(Uart { base: UART_BASE });
 static INITIALISED: AtomicBool = AtomicBool::new(false);
+
+/// Tasks blocked waiting for console input.
+///
+/// Woken from the interrupt handler, which is safe because waking only touches
+/// spin locks and never blocks.
+pub static READERS: WaitQueue = WaitQueue::new();
 
 /// Bytes received by the interrupt handler, waiting to be read.
 static RX_QUEUE: SpinLock<RxRing> = SpinLock::new(RxRing::new());
@@ -223,6 +229,11 @@ pub fn handle_interrupt() -> usize {
         queued += 1;
     }
     queued
+}
+
+/// Wake every task blocked on console input.
+pub fn notify_readers() {
+    READERS.wake_all();
 }
 
 /// Has `init` run? The console backend switch depends on it.

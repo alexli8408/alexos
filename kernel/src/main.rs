@@ -29,9 +29,12 @@ pub mod backtrace;
 pub mod config;
 pub mod drivers;
 pub mod lang_items;
+pub mod loader;
 pub mod mm;
+pub mod programs;
 pub mod sbi;
 pub mod sync;
+pub mod syscall;
 pub mod task;
 pub mod test_device;
 pub mod timer;
@@ -57,9 +60,9 @@ pub extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
     timer::init();
     trap::enable_interrupts();
 
-    task::spawn("spinner", demo::spinner).expect("spawn spinner");
-    task::spawn("console", demo::console).expect("spawn console");
-    task::spawn("heartbeat", demo::heartbeat).expect("spawn heartbeat");
+    info!("programs: {} embedded ({})", programs::count(),
+          programs::names().collect::<alloc::vec::Vec<_>>().join(" "));
+    start_init();
 
     info!("boot complete -- scheduler taking over");
 
@@ -67,68 +70,22 @@ pub extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
     task::scheduler::run()
 }
 
-/// Demonstration tasks, replaced by `init` once userspace exists.
+/// Start the first user process.
 ///
-/// The point is to show three things at once: that the timer preempts a task
-/// that never yields, that a task which blocks on a wait queue is woken by an
-/// interrupt handler, and that the feedback queue keeps the interactive task
-/// responsive while the compute loop runs flat out.
-mod demo {
-    use crate::sync::WaitQueue;
-    use crate::task::{self, scheduler};
+/// Everything after this point happens because `init` asked for it: it forks a
+/// shell, the shell forks commands, and the kernel only ever reacts.
+fn start_init() {
+    let Some(image) = programs::find("init") else {
+        panic!(
+            "no init program embedded -- run `make user` first ({} programs found)",
+            programs::count()
+        );
+    };
 
-    /// Woken by the console interrupt handler.
-    pub static CONSOLE_WAIT: WaitQueue = WaitQueue::new();
-
-    /// Never yields voluntarily. If this task can be interleaved with the
-    /// others, preemption works.
-    pub fn spinner() {
-        let mut n: u64 = 0;
-        loop {
-            // Deliberately tight: no yield, no syscall, nothing that would give
-            // the scheduler a cooperative opening.
-            for _ in 0..8_000_000 {
-                core::hint::spin_loop();
-            }
-            n += 1;
-            let task = scheduler::current_task();
-            let level = task.inner.lock().level;
-            crate::info!("spinner: pass {n} (queue level {level})");
-        }
-    }
-
-    /// Sleeps on a wait queue and reports what was typed.
-    pub fn console() {
-        loop {
-            CONSOLE_WAIT.wait_until(|| crate::drivers::uart::has_input());
-            while let Some(byte) = crate::drivers::uart::read_byte() {
-                match byte {
-                    b'\r' | b'\n' => crate::println!(),
-                    0x7f | 0x08 => crate::print!("\x08 \x08"),
-                    b => crate::print!("{}", b as char),
-                }
-            }
-        }
-    }
-
-    /// Prints a heartbeat, yielding between beats.
-    pub fn heartbeat() {
-        let mut last = 0;
-        loop {
-            let seconds = crate::timer::uptime_ms() / 1000;
-            if seconds != last {
-                last = seconds;
-                let (ready, spawned) = scheduler::stats();
-                crate::debug!("uptime {seconds}s | {ready} ready, {spawned} spawned");
-            }
-            task::yield_now();
-        }
-    }
-}
-
-/// Wake anything blocked on console input. Called from the UART interrupt.
-pub fn main_wake_console() {
-    demo::CONSOLE_WAIT.wake_all();
+    let task = task::Task::new_user("init", image, &[alloc::string::String::from("init")])
+        .expect("could not create init");
+    info!("init is pid {}", task.pid);
+    task::admit(task);
 }
 
 /// Print the banner and the machine description.
