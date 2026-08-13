@@ -1,8 +1,12 @@
 //! Memory management.
 //!
-//! Layered bottom-up: [`addr`] gives typed addresses and page numbers, `frame`
-//! hands out physical frames, `page_table` walks and edits Sv39 tables,
-//! `space` composes those into an address space, and `heap` backs `alloc`.
+//! `addr` gives every address a type. Mixing up a physical address, a virtual
+//! address and a page number is the classic way to lose a weekend to a kernel
+//! bug, so they are four distinct newtypes and every conversion is explicit.
+
+pub mod addr;
+
+pub use addr::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 
 use crate::config::VIRT_OFFSET;
 
@@ -25,8 +29,7 @@ unsafe extern "C" {
 /// Translate a kernel virtual address in the direct map to its physical address.
 ///
 /// Only valid for direct-mapped addresses -- that is, the kernel image and the
-/// physical-memory window. User addresses need a page-table walk instead; see
-/// `space::AddressSpace::translate`.
+/// physical-memory window. User addresses need a page-table walk instead.
 #[inline(always)]
 pub const fn virt_to_phys(vaddr: usize) -> usize {
     vaddr - VIRT_OFFSET
