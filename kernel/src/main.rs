@@ -32,6 +32,7 @@ pub mod lang_items;
 pub mod mm;
 pub mod sbi;
 pub mod sync;
+pub mod task;
 pub mod test_device;
 pub mod timer;
 pub mod trap;
@@ -56,35 +57,78 @@ pub extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
     timer::init();
     trap::enable_interrupts();
 
-    info!("boot complete -- type to echo, interrupts are live");
-    echo_loop()
+    task::spawn("spinner", demo::spinner).expect("spawn spinner");
+    task::spawn("console", demo::console).expect("spawn console");
+    task::spawn("heartbeat", demo::heartbeat).expect("spawn heartbeat");
+
+    info!("boot complete -- scheduler taking over");
+
+    // Becomes this hart's idle loop and never returns.
+    task::scheduler::run()
 }
 
-/// Sit idle until something happens, echoing anything typed at the console.
+/// Demonstration tasks, replaced by `init` once userspace exists.
 ///
-/// This is a placeholder for the scheduler: it proves the timer is preempting
-/// and that UART input arrives by interrupt rather than polling.
-fn echo_loop() -> ! {
-    let mut last_report = 0;
-    loop {
-        while let Some(byte) = drivers::uart::read_byte() {
-            match byte {
-                b'\r' | b'\n' => println!(),
-                0x7f | 0x08 => print!("\x08 \x08"),
-                b => print!("{}", b as char),
+/// The point is to show three things at once: that the timer preempts a task
+/// that never yields, that a task which blocks on a wait queue is woken by an
+/// interrupt handler, and that the feedback queue keeps the interactive task
+/// responsive while the compute loop runs flat out.
+mod demo {
+    use crate::sync::WaitQueue;
+    use crate::task::{self, scheduler};
+
+    /// Woken by the console interrupt handler.
+    pub static CONSOLE_WAIT: WaitQueue = WaitQueue::new();
+
+    /// Never yields voluntarily. If this task can be interleaved with the
+    /// others, preemption works.
+    pub fn spinner() {
+        let mut n: u64 = 0;
+        loop {
+            // Deliberately tight: no yield, no syscall, nothing that would give
+            // the scheduler a cooperative opening.
+            for _ in 0..8_000_000 {
+                core::hint::spin_loop();
+            }
+            n += 1;
+            let task = scheduler::current_task();
+            let level = task.inner.lock().level;
+            crate::info!("spinner: pass {n} (queue level {level})");
+        }
+    }
+
+    /// Sleeps on a wait queue and reports what was typed.
+    pub fn console() {
+        loop {
+            CONSOLE_WAIT.wait_until(|| crate::drivers::uart::has_input());
+            while let Some(byte) = crate::drivers::uart::read_byte() {
+                match byte {
+                    b'\r' | b'\n' => crate::println!(),
+                    0x7f | 0x08 => crate::print!("\x08 \x08"),
+                    b => crate::print!("{}", b as char),
+                }
             }
         }
-
-        // Report once a second so a silent console still shows the timer
-        // ticking, which is the whole point of this loop.
-        let seconds = timer::uptime_ms() / 1000;
-        if seconds != last_report {
-            last_report = seconds;
-            debug!("uptime {}s, {} ticks", seconds, timer::ticks());
-        }
-
-        arch::wait_for_interrupt();
     }
+
+    /// Prints a heartbeat, yielding between beats.
+    pub fn heartbeat() {
+        let mut last = 0;
+        loop {
+            let seconds = crate::timer::uptime_ms() / 1000;
+            if seconds != last {
+                last = seconds;
+                let (ready, spawned) = scheduler::stats();
+                crate::debug!("uptime {seconds}s | {ready} ready, {spawned} spawned");
+            }
+            task::yield_now();
+        }
+    }
+}
+
+/// Wake anything blocked on console input. Called from the UART interrupt.
+pub fn main_wake_console() {
+    demo::CONSOLE_WAIT.wake_all();
 }
 
 /// Print the banner and the machine description.

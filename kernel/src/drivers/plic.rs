@@ -117,7 +117,11 @@ pub fn handle_external_interrupt() {
     while let Some(irq) = claim(hart) {
         match irq {
             UART_IRQ => {
-                crate::drivers::uart::handle_interrupt();
+                if crate::drivers::uart::handle_interrupt() > 0 {
+                    // Waking from interrupt context is safe: it only touches
+                    // spin locks and never blocks.
+                    crate::main_wake_console();
+                }
             }
             other => {
                 crate::warn!("plic: interrupt {other} has no handler");
