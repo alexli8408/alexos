@@ -52,6 +52,7 @@ pub enum LoadError {
 }
 
 /// A loaded program: its address space and where to start executing.
+#[derive(Debug)]
 pub struct LoadedImage {
     /// The new address space, with every `PT_LOAD` segment mapped.
     pub space: AddressSpace,

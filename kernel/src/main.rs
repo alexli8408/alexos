@@ -33,10 +33,13 @@ pub mod loader;
 pub mod mm;
 pub mod programs;
 pub mod sbi;
+pub mod ktest;
 pub mod sync;
 pub mod syscall;
 pub mod task;
 pub mod test_device;
+#[cfg(feature = "ktest")]
+pub mod tests;
 pub mod timer;
 pub mod trap;
 
@@ -62,6 +65,14 @@ pub extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
 
     info!("programs: {} embedded ({})", programs::count(),
           programs::names().collect::<alloc::vec::Vec<_>>().join(" "));
+
+    // The test suite runs as a kernel task, so tests that block on a wait
+    // queue or depend on preemption behave exactly as they would in
+    // production. It reports through the test finisher and never returns.
+    #[cfg(feature = "ktest")]
+    task::spawn("ktest", ktest::run_all_task).expect("could not start the test suite");
+
+    #[cfg(not(feature = "ktest"))]
     start_init();
 
     info!("boot complete -- scheduler taking over");
@@ -70,6 +81,7 @@ pub extern "C" fn kmain(hart_id: usize, dtb: usize) -> ! {
     task::scheduler::run()
 }
 
+#[cfg_attr(feature = "ktest", allow(dead_code))]
 /// Start the first user process.
 ///
 /// Everything after this point happens because `init` asked for it: it forks a

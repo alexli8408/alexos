@@ -20,5 +20,9 @@ trace = []
 # Make a panic exit QEMU with a failure status instead of powering off cleanly.
 # `make test` turns this on so a panicking kernel fails CI.
 exit-on-panic = []
+# Run the in-kernel test suite instead of starting init, then exit QEMU with a
+# status reflecting the result. Implies exit-on-panic, since a panicking test
+# must fail the build.
+ktest = ["exit-on-panic"]
 
 [dependencies]

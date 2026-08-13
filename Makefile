@@ -67,11 +67,11 @@ gdb:
 	riscv64-elf-gdb $(KERNEL_ELF) -ex 'target remote :1234'
 
 # The kernel writes to the SiFive test finisher to set QEMU's exit code, so a
-# failing assertion fails the build rather than just printing.
-test:
-	cargo build -p alexos-kernel --$(PROFILE) --features exit-on-panic
+# failing assertion fails this target rather than just printing.
+test: user
+	cargo build -p alexos-kernel --$(PROFILE) --features ktest
 	$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $(KERNEL_BIN)
-	qemu-system-riscv64 $(QEMU_ARGS) -append ktest
+	@scripts/run-qemu.sh -t 60 -- qemu-system-riscv64 $(QEMU_ARGS)
 
 check:
 	cargo check -p alexos-kernel --$(PROFILE)

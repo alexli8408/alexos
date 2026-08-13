@@ -164,6 +164,12 @@ impl Region {
     }
 }
 
+impl core::fmt::Debug for AddressSpace {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "AddressSpace {{ {} regions, {:?} }}", self.regions.len(), self.table)
+    }
+}
+
 /// A page table plus the regions mapped into it.
 pub struct AddressSpace {
     table: PageTable,
