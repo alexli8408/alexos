@@ -23,10 +23,27 @@ use crate::timer;
 pub use context::TrapFrame;
 
 global_asm!(include_str!("trap.S"));
+global_asm!(include_str!("user.S"));
 
 unsafe extern "C" {
-    /// Assembly trap entry; installed in `stvec`.
+    /// Assembly trap entry for traps taken in supervisor mode.
     fn kernel_trap_entry();
+    /// Assembly trap entry for traps taken in user mode.
+    fn user_trap_entry();
+    /// Restore `frame` and `sret` into user mode. Never returns.
+    pub fn user_trap_return(frame: *mut TrapFrame) -> !;
+}
+
+/// Point `stvec` at the user entry, to be done before returning to user mode.
+pub fn set_user_vector() {
+    // SAFETY: 4-byte aligned, so Direct mode stays selected.
+    unsafe { arch::stvec::write(user_trap_entry as *const () as usize) };
+}
+
+/// Point `stvec` back at the kernel entry, first thing on entry from user mode.
+pub fn set_kernel_vector() {
+    // SAFETY: as above.
+    unsafe { arch::stvec::write(kernel_trap_entry as *const () as usize) };
 }
 
 /// `scause` values, decoded.
@@ -146,6 +163,71 @@ pub extern "C" fn kernel_trap_handler(frame: &mut TrapFrame) {
     // now the trap frame is fully built on this task's kernel stack, so
     // switching away and coming back later resumes exactly where we left off.
     crate::task::scheduler::resched_if_needed();
+}
+
+/// Rust handler for traps taken in user mode.
+///
+/// Called from `user.S` with the saved frame, and returns the frame to resume
+/// -- which is not always the one it was given, because `exec` replaces it.
+///
+/// Unlike the supervisor handler, almost nothing here is fatal to the kernel. A
+/// user program that faults is killed; the machine carries on.
+#[unsafe(no_mangle)]
+pub extern "C" fn user_trap_handler(frame: &mut TrapFrame) -> *mut TrapFrame {
+    // Traps taken from here on are supervisor traps and must not come back
+    // through the user entry, which would try to swap sp with sscratch again.
+    set_kernel_vector();
+
+    let scause = arch::scause::read();
+    let stval = arch::stval::read();
+    let cause = Cause::decode(scause);
+
+    match cause {
+        Cause::UserEcall => {
+            // `ecall` leaves sepc pointing at itself. Advance before dispatch
+            // rather than after, so fork -- whose child resumes from a copy of
+            // this frame -- inherits an already-advanced sepc for free.
+            frame.sepc += 4;
+
+            // Syscalls run with interrupts on: they can block, and a task that
+            // blocks with interrupts masked would never be woken by a device.
+            // SAFETY: no locks are held at this point.
+            unsafe { arch::intr_enable() };
+            let ret = crate::syscall::dispatch(frame);
+            // SAFETY: restoring the masked state the trap exit path expects.
+            unsafe { arch::intr_disable() };
+
+            frame.set_return(ret as usize);
+        }
+        Cause::TimerInterrupt => timer::on_tick(),
+        Cause::ExternalInterrupt => crate::drivers::plic::handle_external_interrupt(),
+        Cause::SoftwareInterrupt => {
+            // SAFETY: acknowledging our own IPI.
+            unsafe { arch::sip::clear(int_bits::SSIE) };
+        }
+        _ => kill_current(cause, stval, frame),
+    }
+
+    crate::task::scheduler::resched_if_needed();
+
+    // Re-read the frame rather than reusing the argument: exec swaps in a new
+    // one, and returning the old pointer would resume the program that just
+    // got replaced.
+    set_user_vector();
+    crate::task::process::frame_ptr(&crate::task::scheduler::current_task())
+}
+
+/// Terminate the current user process after an illegal operation.
+fn kill_current(cause: Cause, stval: usize, frame: &TrapFrame) -> ! {
+    let task = crate::task::scheduler::current_task();
+    crate::error!(
+        "killing pid {} ({}): {cause:?} at sepc {:#x}, stval {stval:#x}",
+        task.pid,
+        *task.name.lock(),
+        frame.sepc
+    );
+    // 128 + signal number, the convention a shell reports as "killed by".
+    crate::task::scheduler::exit_current(-11)
 }
 
 /// Report an unrecoverable supervisor trap and stop.
